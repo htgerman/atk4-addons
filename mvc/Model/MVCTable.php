@@ -10,6 +10,7 @@ abstract class Model_MVCTable extends Model {
 	protected $entity_code = null;
 	protected $id = null;			// set with loadData(), identifies the singly entity
 	protected $table_alias = null;	// we need alias always for more simple way in setQueryFields method
+    protected $id_field = 'id';     // don't change. "id" fields are nice!
 	protected $dsql=array();
 	protected $fields_set=false;	// turns to true in setQueryFields(). prevents call to setQueryFields()
 									// during execQuery() event
@@ -57,11 +58,8 @@ abstract class Model_MVCTable extends Model {
 	public function init() {
 		parent::init();
         if(!$this->table_alias)$this->table_alias=$this->entity_code;
-		if(is_null($this->entity_code))throw new Exception_InitError('You should define entity code for '.get_class($this));
-		$this->addField('id')
-			->datatype('int')
-			->system(true)
-		;
+		if(is_null($this->entity_code))throw new Exception_InitError('You should define $entity_code (table) for '.get_class($this));
+        $this->definePrimaryKey();
 
 		if(method_exists($this,'defineFields')){
 			//throw new Exception_Obsolete('defineFields method is obsolete');
@@ -73,6 +71,12 @@ abstract class Model_MVCTable extends Model {
 		// trying to set required fields
 		//$this->api->addHook('post-init',array($this,'setMandatoryConditions'));
 	}
+    public function definePrimaryKey(){
+		$this->addField($this->id_field)
+			->datatype('int')
+			->system(true)
+		;
+    }
 	function debug($what=true){
 		$this->debug=$what;
 		return $this;
@@ -215,7 +219,7 @@ abstract class Model_MVCTable extends Model {
 	 * Some entities, such as contractors, have other field as name
 	 */
 	public function getListFields(){
-		return array('id'=>'id','name'=>'name');
+		return array($this->id_field=>'id','name'=>'name');
 	}
 	/**
 	 * Create and return DSQL object
@@ -624,16 +628,16 @@ abstract class Model_MVCTable extends Model {
 	 * Add item into $join_entities property
 	 * Calling this method causes join by the following rules:
 	 * 1) related entity is always joined by ID
-	 * 2) two types of join can be created: related entity references to master and master entity references to related
-	 * 3) if MASTER references to related (as contractor references to address):
+	 * 2) two types of join can be created: many to one (mto) and one to many (otm)
+	 * 3)"mto" reference is used if THIS table contains foreign key $join_field referencing id of RELATED table
 	 * 		$join_type JOIN $entity_name $entity_alias ON $master_alias.$join_field = $entity_alias.id
-	 * 4) if RELATED references to master (as invoice references dochead):
+	 * 4)"otm" reference is used if RELATED table contains foreign key $join_field referencing id of THIS table
 	 * 		$join_type JOIN $entity_name $entity_alias ON $entity_alias.$join_field = $master_alias.id
 	 *
 	 * @param string $entity_alias related table alias
 	 * @param string $entity_name related table name
 	 * @param string $join_field field used in join condition
-	 * @param string $reference_type either 'master' or 'related', defines WHICH $join_field to use in join, default 'master'
+	 * @param string $reference_type either 'mto' or 'otm', defines WHICH $join_field to use in join, default 'mto'
 	 * @param string $join_type 'inner' or 'left outer' type of join (optional, 'inner' by default)
 	 * @param bool $required if true - related entity MUST be inserted with insertRecord(), even if no values were set
 	 * 	for corresponding entity
@@ -641,13 +645,15 @@ abstract class Model_MVCTable extends Model {
 	 * @return $this
 	 */
 	public function addRelatedEntity($entity_alias, $entity_name, $join_field, $join_type = 'inner',
-										$reference_type='master', $required=false, $master_alias = null) {
+										$reference_type='mto', $required=false, $master_alias = null) {
 		if (is_null($master_alias))
 			$master_alias = $this->table_alias;
 
+        if($reference_type=='master')$reference_type='mto';     // backwards compatibliity
+
 		//while(isset($this->join_entities[$alias])){$alias.='1';}
-		$join_alias=$reference_type=='master'?$master_alias:$entity_alias;
-		$other_alias=$reference_type=='master'?$entity_alias:$master_alias;
+		$join_alias=$reference_type=='mto'?$master_alias:$entity_alias;
+		$other_alias=$reference_type=='mto'?$entity_alias:$master_alias;
 
 		$on_condition = $join_alias.'.'.$join_field.' = '.$other_alias.'.id';
 		$this->join_entities[$entity_alias] = array('readonly'=>false,'entity_name'=>$entity_name,'join_field'=>$join_field,
@@ -656,7 +662,7 @@ abstract class Model_MVCTable extends Model {
 
         // Define ID file (used when inserting)
         $f=$this->addField($join_field)->system(true);
-        if($reference_type!='master')$f->relEntity($entity_alias);
+        if($reference_type!='mto')$f->relEntity($entity_alias);
 
 		return $this;
 	}
@@ -1038,7 +1044,7 @@ abstract class Model_MVCTable extends Model {
 		return $this;
 	}
 	function updateRecord($id=null, $data=array()) {
-		if(is_null($id))$id=$this->get('id');
+		if(is_null($id))$id=$this->get($this->id_field);
 
 		$this->api->db->beginTransaction();
 		try{
@@ -1125,7 +1131,7 @@ abstract class Model_MVCTable extends Model {
 			if (isset($this->fields['updated_by']))
 				$this->dsql('modify',false)->set('updated_by',$this->api->getUserId());
 
-			$this->dsql('modify',false)->where('id',$id);
+			$this->dsql('modify',false)->where($this->id_field,$id);
 			//$this->logVar($this->dsql('modify',false)->update());
 
 			$this->dsql('modify',false)->do_update();
@@ -1147,11 +1153,11 @@ abstract class Model_MVCTable extends Model {
 	public function archive(){
 		if(!$this->fieldExists('archive'))throw new Exception_InitError($this->short_name.
 			" does not have archive ability");
-		$this->set('archive',true)->updateRecord($this->get('id'));
+		$this->set('archive',true)->updateRecord($this->get($this->id_field));
 		return $this;
 	}
 	public function delete(){
-		$r=$this->deleteRecord($this->get('id'));
+		$r=$this->deleteRecord($this->get($this->id_field));
 		return $r;
 	}
 	/**
@@ -1165,7 +1171,7 @@ abstract class Model_MVCTable extends Model {
 		throw new Exception_NotImplemented("Restore is not implemented for ".get_class($this));
 	}
 	protected function deleteRecord($id=null) {
-		if(is_null($id))$id=$this->get('id');
+		if(is_null($id))$id=$this->get($this->id_field);
 		else $this->loadData($id);
 		// see insertRecord() for explanations on this check
 		if($this->isReadonly())throw new Exception_AccessDenied('Operation not allowed!');
@@ -1177,7 +1183,7 @@ abstract class Model_MVCTable extends Model {
 		try{
 			$this->beforeDelete($this->data);
 			if (isset($this->fields['deleted'])) {
-				$dq = $this->dsql(null,false)->where('id',$id)
+				$dq = $this->dsql(null,false)->where($this->id_field,$id)
 						->set('deleted','Y');
 
 				if (isset($this->fields['deleted_dts']))
@@ -1189,8 +1195,7 @@ abstract class Model_MVCTable extends Model {
 				$dq->do_update();
 
 			}
-			else
-				$this->dsql(null,false)->where('id',$id)->do_delete();
+			else $this->dsql(null,false)->where($this->id_field,$id)->do_delete();
 
 			$this->afterDelete($id);
 			$this->api->db->commit();
@@ -1298,7 +1303,7 @@ abstract class Model_MVCTable extends Model {
 		$this->resetQuery('loadData_'.$id)->setQueryFields('loadData_'.$id,$get_fields);
 		$q=$this
 			->dsql('loadData_'.$id)
-			->where($this->fieldWithAlias('id'),$this->id)
+			->where($this->fieldWithAlias($this->id_field),$this->id)
 		;
 		//if($this instanceof Model_Invoice)
 		//	$this->logVar($q->select(),"$this->short_name:");
@@ -1436,7 +1441,7 @@ abstract class Model_MVCTable extends Model {
       */
 	public function loadBy($field,$value=null,$case_insensitive=false){
 		$id=$this->getBy($field,$value,$case_insensitive);
-        if($id)$this->loadData($id['id']);
+        if($id)$this->loadData($id[$this->id_field]);
         return $this;
 	}
 	/**

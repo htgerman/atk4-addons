@@ -85,12 +85,17 @@ class MVCFieldDefinition {
 		$this->instance_name=$this->owner->name.'_undefined';
 	}
 
+    public function destroy(){
+        unset($this->owner->fields[$this->name]);
+    }
 	public function name($new_value=null) {
 		if (is_null($new_value))
 			return $this->name;
 		else {
+            $this->destroy();
 			$this->name = $new_value;
 			$this->instance_name=$this->owner->name.'_'.$new_value;
+            $this->owner->field[$this->name]=$this;
 			return $this;
 		}
 	}
